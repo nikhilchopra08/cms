@@ -1,0 +1,40 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  // url      = env("DATABASE_URL")
+}
+
+model User {
+  id       String @id @default(uuid())
+  email    String @unique
+  phone    String @unique
+  password String
+
+  purchases Purchases[]
+}
+
+model Course {
+  id    String @id @default(uuid())
+  title String
+  slug  String
+
+  purchases Purchases[]
+  calendarNotionId String
+}
+
+model Purchases {
+  id       String @id @default(uuid())
+  courseId String
+  userId   String
+  user     User   @relation(fields: [userId], references: [id])
+  course   Course @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId])
+}
