@@ -1,0 +1,17 @@
+{
+  "name": "common",
+  "module": "inputs.ts",
+  "type": "module",
+  "exports" : {
+    "./inputs" : "./inputs.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "zod": "^4.2.1"
+  }
+}

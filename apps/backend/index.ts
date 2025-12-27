@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors"
-import { prismaClient } from "db";
+import { prismaClient } from "db/client";
 import { authMiddleware } from "./middleware";
 import { SignupSchema } from "common/inputs"
 import jwt from "jsonwebtoken"
