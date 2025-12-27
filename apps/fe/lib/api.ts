@@ -1,0 +1,1 @@
+const BASE = process.env.NEXT_BACKEND_URL || "http://localhost:3000";
