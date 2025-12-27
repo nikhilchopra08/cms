@@ -88,9 +88,23 @@ app.get("/calender/:courseId", authMiddleware, async (req, res) => {
     })
 })
 
-app.post("/", (req, res) => {
+app.get("/courses", authMiddleware, async (req, res) => {
+    const courses = await prismaClient.course.findMany({
+        where: {
+            purchases: {
+                some: {
+                    userId : req.userId
+                }
+            }
+        }
+    })
+
     res.json({
-        message : "hello"
+        courses: courses.map(c => ({
+            id : c.id,
+            title : c.title,
+            slug : c.slug
+        }))
     })
 })
 
