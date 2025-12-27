@@ -6,10 +6,11 @@ import { SignupSchema } from "common/inputs"
 import jwt from "jsonwebtoken"
 
 const app = express();
-app.use(cors);
+app.use(cors());
 app.use(express.json());
 
 app.post("/signin", async (req, res) => {
+    console.log("inside the signin")
     const {success, data} = SignupSchema.safeParse(req.body);
     if(!success){
         res.status(403).json({
@@ -84,6 +85,12 @@ app.get("/calender/:courseId", authMiddleware, async (req, res) => {
     res.json({
         id : course?.id,
         calenderId : course.calendarNotionId
+    })
+})
+
+app.post("/", (req, res) => {
+    res.json({
+        message : "hello"
     })
 })
 
