@@ -1,0 +1,14 @@
+node_modules
+dist
+build
+.turbo
+.DS_Store
+pkg/*.ts
+pkg/.gitignore
+.vscode
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+NPM_PUBLISH_GUIDE.md
