@@ -5,7 +5,7 @@ const cli = new TSSCli('devnet');
 
 const app = express();
 
-app.post("create-user", async(req, res) => {
+app.post("/create-user", async(req, res) => {
     const {userId} = req.body;
     const participant = await cli.generate();
 
