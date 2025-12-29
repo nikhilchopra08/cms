@@ -24,6 +24,7 @@ export class TSSCli {
     secretKey: string;
   }> {
     const keypair = await this.wallet.generateKeypair();
+    console.log(keypair.secretKey)
     return {
       publicKey: keypair.publicKey.toString(),
       secretKey: Buffer.from(keypair.secretKey).toString('hex')

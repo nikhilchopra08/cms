@@ -14,6 +14,7 @@ export class TSSWallet {
     this.network = network;
     // this.connection = new Connection(clusterApiUrl(network), 'confirmed');
     this.connection = new Connection("https://empty-yolo-cherry.solana-devnet.quiknode.pro/e0ba6f87455fe93694ecec520d446cdebb0fd8aa/", "confirmed")
+    // this.connection = new Connection("https://solana-devnet.g.alchemy.com/v2/mRNVIzf44k3YCI1_eQPoO", "confirmed")
   }
 
   /**
@@ -21,21 +22,21 @@ export class TSSWallet {
    * Equivalent to: solana-tss generate
    */
   async generateKeypair(): Promise<TSSKeypair> {
-    try {
-      // Try to use MPC signer if available
-      const mpcSigner = await createMPCSigner();
-      return {
-        publicKey: mpcSigner.publicKey,
-        secretKey: new Uint8Array(32) // MPC manages the actual secret
-      };
-    } catch (error) {
-      // Fallback to regular keypair generation
+    // try {
+    //   // Try to use MPC signer if available
+    //   const mpcSigner = await createMPCSigner();
+    //   return {
+    //     publicKey: mpcSigner.publicKey,
+    //     secretKey: new Uint8Array(32) // MPC manages the actual secret
+    //   };
+    // } catch (error) {
+    //   // Fallback to regular keypair generation
       const keypair = Keypair.generate();
       return {
         publicKey: keypair.publicKey,
         secretKey: keypair.secretKey
       };
-    }
+    // }
   }
 
   /**

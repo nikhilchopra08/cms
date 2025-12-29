@@ -11,6 +11,7 @@ app.use(express.json())
 app.post("/create-user", async(req, res) => {
     const {userId} = req.body;
     const participant = await cli.generate();
+    console.log(participant)
 
     await prismaClient.keyShare.create({
         data: {
@@ -63,6 +64,7 @@ app.post("/send/step1", async(req, res) => {
 
 app.post("/send/step2", async(req, res) => {
     const {to, amount, userId, recentBlockhash, step1Response, allPublicNonces} = req.body;
+    console.log(req.body);
     const user = await prismaClient.keyShare.findFirst({
         where: {
             userId : userId
@@ -75,6 +77,8 @@ app.post("/send/step2", async(req, res) => {
         });
         return;
     }
+
+    console.log(step1Response);
 
     const response = await cli.aggregateSignStepTwo(
         step1Response,
@@ -92,4 +96,4 @@ app.post("/send/step2", async(req, res) => {
     })
 })
 
-app.listen(3001);
+app.listen(3002);

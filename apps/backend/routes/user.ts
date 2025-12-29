@@ -143,20 +143,30 @@ router.post("/send", authMiddleware, async(req, res) => {
             userId : req.userId,
             recentBlockhash: recentBlockhash
         })
-        return response.data
+        return response.data.response
     }))
 
     console.log("step1 response" , step1Responses);
 
-
+    
     const step2Responses = await Promise.all(MPC_SERVER.map(async (server, index) => {
+
+        console.log({
+            to: data.to,
+            amount : data.amount,
+            userId : req.userId,
+            recentBlockhash: recentBlockhash,
+            step1Response: JSON.stringify(step1Responses[index]),
+            allPublicNonces: step1Responses.map((r) => r.publicNonce)
+        })
+
         const response = await axios.post(`${server}/send/step2`, {
             to: data.to,
             amount : data.amount,
             userId : req.userId,
             recentBlockhash: recentBlockhash,
-            step1Response: step1Responses[index],
-            allPublicNonces: JSON.stringify(step1Responses.map((r) => r.response.publicNonce))
+            step1Response: JSON.stringify(step1Responses[index]),
+            allPublicNonces: step1Responses.map((r) => r.publicNonce)
         })
         return response.data;
     }))
@@ -169,7 +179,7 @@ router.post("/send", authMiddleware, async(req, res) => {
         amount : data.amount,
         to : data.to,
         from : user.publicKey,
-        netowrk : NETWORK,
+        network : NETWORK,
         memo : undefined,
         recentBlockhash: recentBlockhash
     }
