@@ -24,6 +24,7 @@
         "cors": "^2.8.5",
         "db": "*",
         "express": "^5.2.1",
+        "solana-mpc-tss-lib": "*",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -53,7 +54,9 @@
       "name": "mpc-backend",
       "dependencies": {
         "@types/express": "^5.0.6",
+        "common": "*",
         "express": "^5.2.1",
+        "mpc-db": "*",
         "solana-mpc-tss-lib": "*",
       },
       "devDependencies": {

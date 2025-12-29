@@ -12,7 +12,8 @@ export class TSSWallet {
 
   constructor(network: SolanaNetwork = 'devnet') {
     this.network = network;
-    this.connection = new Connection(clusterApiUrl(network), 'confirmed');
+    // this.connection = new Connection(clusterApiUrl(network), 'confirmed');
+    this.connection = new Connection("https://empty-yolo-cherry.solana-devnet.quiknode.pro/e0ba6f87455fe93694ecec520d446cdebb0fd8aa/", "confirmed")
   }
 
   /**

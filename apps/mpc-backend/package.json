@@ -12,6 +12,8 @@
   "dependencies": {
     "@types/express": "^5.0.6",
     "express": "^5.2.1",
-    "solana-mpc-tss-lib": "*"
+    "solana-mpc-tss-lib": "*",
+    "mpc-db" : "*",
+    "common" : "*"
   }
 }

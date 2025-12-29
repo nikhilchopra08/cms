@@ -13,9 +13,10 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "axios": "^1.13.2",
-    "common": "*",
     "cors": "^2.8.5",
+    "express": "^5.2.1",
+    "common": "*",
     "db": "*",
-    "express": "^5.2.1"
+    "solana-mpc-tss-lib" : "*"
   }
 }

@@ -3,7 +3,8 @@
   "module": "inputs.ts",
   "type": "module",
   "exports" : {
-    "./inputs" : "./inputs.ts"
+    "./inputs" : "./inputs.ts",
+    "./solana" : "./solana.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"
