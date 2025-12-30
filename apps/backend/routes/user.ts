@@ -3,7 +3,7 @@ import { prismaClient } from "db/client";
 import { Router } from "express";
 import { authMiddleware } from "../middleware";
 import jwt from "jsonwebtoken";
-import { cli, MPC_SERVER, MPC_THRESHOLD } from "./admin";
+import { MPC_SERVER, MPC_THRESHOLD } from "./admin";
 import axios from "axios";
 import { NETWORK } from "common/solana";
 import { 
