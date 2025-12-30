@@ -30,11 +30,77 @@ function hexSecretToKeypair(hexSecret) {
     return Keypair.fromSecretKey(secretBuffer);
 }
 
-// ============================================
-// CRITICAL FIX: Use ACTUAL sender key, not aggregated key
-// ============================================
+// CREATE USER ENDPOINT - Generates keypair for user
+app.post("/create-user", async(req, res) => {
+    try {
+        const {userId} = req.body;
+        
+        console.log("Creating key share for userId:", userId);
+        
+        if (!userId) {
+            return res.status(400).json({
+                success: false,
+                message: "userId is required"
+            });
+        }
 
-// STEP 1: Prepare transaction - MODIFIED to use actual signer key
+        // Check if key share already exists for this user
+        const existingKeyShare = await prismaClient.keyShare.findFirst({
+            where: {
+                userId: userId
+            }
+        });
+
+        if (existingKeyShare) {
+            console.log("Key share already exists for user:", userId);
+            return res.json({
+                success: true,
+                publicKey: existingKeyShare.publicKey,
+                userId: userId,
+                message: "Using existing key share"
+            });
+        }
+
+        // Generate a new keypair
+        const keypair = Keypair.generate();
+        
+        // Convert secret key to hex format
+        const secretKeyHex = Buffer.from(keypair.secretKey).toString('hex');
+        
+        // Store in MPC database
+        await prismaClient.keyShare.create({
+            data: {
+                userId: userId,
+                publicKey: keypair.publicKey.toString(),
+                secretKey: secretKeyHex
+            }
+        });
+
+        console.log("Key share created:", {
+            userId: userId,
+            publicKey: keypair.publicKey.toString(),
+            secretKeyLength: secretKeyHex.length
+        });
+
+        res.json({
+            success: true,
+            publicKey: keypair.publicKey.toString(),
+            userId: userId,
+            message: "Key share created successfully"
+        });
+
+    } catch (error) {
+        console.error("Error creating key share:", error);
+        
+        res.status(500).json({
+            success: false,
+            message: "Failed to create key share",
+            error: error.message
+        });
+    }
+});
+
+// STEP 1: Prepare transaction
 app.post("/send/step1", async(req, res) => {
     try {
         const {to, amount, userId, recentBlockhash, aggregatedPublicKey} = req.body;
@@ -57,15 +123,12 @@ app.post("/send/step1", async(req, res) => {
         console.log("User identified. Public key:", user.publicKey);
         console.log("Secret key length:", user.secretKey.length, "chars");
 
-        // ============================================
-        // CRITICAL CHANGE: Use the ACTUAL user's public key as sender
-        // NOT the aggregated key unless it's the same
-        // ============================================
+        // Use the ACTUAL user's public key as sender
         const actualSenderKey = user.publicKey;
         console.log("Actual sender key:", actualSenderKey);
         console.log("Aggregated key (for reference):", aggregatedPublicKey);
 
-        // Check balance of ACTUAL sender
+        // Check balance
         const balance = await connection.getBalance(new PublicKey(actualSenderKey));
         console.log(`Balance for ${actualSenderKey}: ${balance / LAMPORTS_PER_SOL} SOL`);
         
@@ -77,15 +140,14 @@ app.post("/send/step1", async(req, res) => {
         const transaction = new Transaction();
         transaction.add(
             SystemProgram.transfer({
-                fromPubkey: new PublicKey(actualSenderKey), // ACTUAL sender
+                fromPubkey: new PublicKey(actualSenderKey),
                 toPubkey: new PublicKey(to),
                 lamports: amount,
             })
         );
 
-        // Set transaction properties
         transaction.recentBlockhash = recentBlockhash;
-        transaction.feePayer = new PublicKey(actualSenderKey); // ACTUAL fee payer
+        transaction.feePayer = new PublicKey(actualSenderKey);
 
         // Serialize the message
         const messageBytes = transaction.serializeMessage();
@@ -100,7 +162,7 @@ app.post("/send/step1", async(req, res) => {
             secretNonce: secretNonce.toString('hex'),
             messageBytes: Buffer.from(messageBytes).toString('hex'),
             timestamp: Date.now(),
-            actualSenderKey: actualSenderKey, // Store actual sender
+            actualSenderKey: actualSenderKey,
             aggregatedPublicKey: aggregatedPublicKey,
             amount: amount,
             to: to
@@ -119,10 +181,10 @@ app.post("/send/step1", async(req, res) => {
                 publicNonce: publicNonce.toString('hex'),
                 messageBytes: Buffer.from(messageBytes).toString('hex'),
                 publicKey: user.publicKey,
-                actualSenderKey: actualSenderKey, // Include actual sender
+                actualSenderKey: actualSenderKey,
                 nonceKey: nonceKey,
                 transaction: {
-                    from: actualSenderKey, // Use actual sender
+                    from: actualSenderKey,
                     to: to,
                     amount: amount,
                     recentBlockhash: recentBlockhash
@@ -138,7 +200,7 @@ app.post("/send/step1", async(req, res) => {
     }
 })
 
-// STEP 2: Create partial signature - No changes needed
+// STEP 2: Create partial signature
 app.post("/send/step2", async(req, res) => {
     try {
         const {userId, step1Response, allPublicNonces} = req.body;
@@ -222,26 +284,22 @@ app.post("/send/step2", async(req, res) => {
     }
 })
 
-// STEP 3: SIMPLE WORKING BROADCAST
+// STEP 3: Working broadcast
 app.post("/send/aggregate-and-broadcast", async(req, res) => {
     try {
-        console.log("=== SIMPLE BROADCAST ===");
+        console.log("=== BROADCAST ===");
         
-        const {partialSignatures} = req.body;
+        const {to, amount, recentBlockhash, partialSignatures} = req.body;
         
         if (!partialSignatures || partialSignatures.length === 0) {
             throw new Error("No signatures provided");
         }
 
-        // ============================================
-        // SIMPLE APPROACH: Use the FIRST signer as actual sender
-        // This will WORK because we have the private key
-        // ============================================
-        
+        // Use the FIRST signer as actual sender
         const firstSignature = partialSignatures[0];
         console.log("Using first signer as sender:", firstSignature.publicKey);
         
-        // Get user data to get secret key
+        // Get user data
         const user = await prismaClient.keyShare.findFirst({
             where: {
                 publicKey: firstSignature.publicKey
@@ -249,12 +307,8 @@ app.post("/send/aggregate-and-broadcast", async(req, res) => {
         });
         
         if (!user) {
-            throw new Error(`No secret key found for ${firstSignature.publicKey}`);
+            throw new Error(`No key found for ${firstSignature.publicKey}`);
         }
-        
-        // Get transaction details from the signature data
-        // These should be passed from the frontend
-        const { to, amount, recentBlockhash } = req.body;
         
         if (!to || !amount || !recentBlockhash) {
             throw new Error("Missing transaction details");
@@ -262,30 +316,19 @@ app.post("/send/aggregate-and-broadcast", async(req, res) => {
         
         console.log("Transaction details:", { to, amount, recentBlockhash });
         
-        // Create keypair for the ACTUAL sender
+        // Create keypair for sender
         const senderKeypair = hexSecretToKeypair(user.secretKey);
-        console.log("Sender keypair created:", senderKeypair.publicKey.toString());
+        console.log("Sender keypair:", senderKeypair.publicKey.toString());
         
         // Check balance
         const balance = await connection.getBalance(senderKeypair.publicKey);
-        console.log(`Sender balance: ${balance / LAMPORTS_PER_SOL} SOL`);
+        console.log(`Balance: ${balance / LAMPORTS_PER_SOL} SOL`);
         
         if (balance < amount + 5000) {
-            throw new Error(`Insufficient balance. Need ${(amount + 5000) / LAMPORTS_PER_SOL} SOL, have ${balance / LAMPORTS_PER_SOL} SOL`);
+            throw new Error(`Insufficient balance`);
         }
         
-        // ============================================
-        // CREATE AND SIGN TRANSACTION - THIS WILL WORK
-        // ============================================
-        
-        // Get fresh blockhash if needed
-        let blockhashToUse = recentBlockhash;
-        if (!blockhashToUse) {
-            const latest = await connection.getLatestBlockhash('confirmed');
-            blockhashToUse = latest.blockhash;
-        }
-        
-        // Create transaction
+        // Create and sign transaction
         const transaction = new Transaction();
         transaction.add(
             SystemProgram.transfer({
@@ -295,48 +338,31 @@ app.post("/send/aggregate-and-broadcast", async(req, res) => {
             })
         );
         
-        transaction.recentBlockhash = blockhashToUse;
+        transaction.recentBlockhash = recentBlockhash;
         transaction.feePayer = senderKeypair.publicKey;
-        
-        // Sign with ACTUAL sender keypair
         transaction.sign(senderKeypair);
         
-        console.log("Transaction created and signed");
-        
-        // Verify signature
-        const isVerified = transaction.verifySignatures();
-        console.log("Signature verified:", isVerified);
-        
-        if (!isVerified) {
-            throw new Error("Signature verification failed");
-        }
+        console.log("Transaction signed");
         
         // Send transaction
-        console.log("Sending transaction...");
         const rawTransaction = transaction.serialize();
-        
         const txid = await connection.sendRawTransaction(rawTransaction, {
             skipPreflight: false,
             preflightCommitment: 'confirmed',
-            maxRetries: 5
+            maxRetries: 3
         });
         
         console.log("✅ Transaction sent:", txid);
         
-        // Wait for confirmation
-        console.log("Waiting for confirmation...");
-        const confirmation = await connection.confirmTransaction({
-            signature: txid,
-            blockhash: blockhashToUse,
-            lastValidBlockHeight: (await connection.getLatestBlockhash('confirmed')).lastValidBlockHeight
-        }, 'confirmed');
+        // Confirm
+        const confirmation = await connection.confirmTransaction(txid, 'confirmed');
         
         if (confirmation.value.err) {
             console.error("❌ Transaction failed:", confirmation.value.err);
             throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
         }
         
-        console.log("🎉 Transaction confirmed successfully!");
+        console.log("🎉 Transaction confirmed!");
         
         res.json({
             success: true,
@@ -352,7 +378,7 @@ app.post("/send/aggregate-and-broadcast", async(req, res) => {
         });
         
     } catch (error) {
-        console.error("❌ Error in broadcast:", error);
+        console.error("❌ Broadcast error:", error);
         res.status(500).json({
             success: false,
             message: "Transaction failed",
@@ -361,9 +387,7 @@ app.post("/send/aggregate-and-broadcast", async(req, res) => {
     }
 })
 
-// ============================================
-// NEW: Single signer endpoint (simplest working version)
-// ============================================
+// Simple transfer endpoint
 app.post("/send/simple-transfer", async(req, res) => {
     try {
         const {userId, to, amount, recentBlockhash} = req.body;
@@ -390,7 +414,7 @@ app.post("/send/simple-transfer", async(req, res) => {
             throw new Error("Insufficient balance");
         }
         
-        // Get blockhash
+        // Get blockhash if not provided
         let blockhashToUse = recentBlockhash;
         if (!blockhashToUse) {
             const latest = await connection.getLatestBlockhash('confirmed');
@@ -446,8 +470,46 @@ app.get("/health", (req, res) => {
     res.json({
         status: "healthy",
         timestamp: new Date().toISOString(),
-        network: NETWORK
+        network: NETWORK,
+        nonceStorageSize: nonceStorage.size
     });
+});
+
+// Get user info
+app.get("/user/:userId", async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        const user = await prismaClient.keyShare.findFirst({
+            where: { userId }
+        });
+        
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found"
+            });
+        }
+        
+        // Check balance
+        const balance = await connection.getBalance(new PublicKey(user.publicKey));
+        
+        res.json({
+            success: true,
+            userId: user.userId,
+            publicKey: user.publicKey,
+            balance: balance / LAMPORTS_PER_SOL,
+            balanceLamports: balance,
+            createdAt: user.createdAt
+        });
+        
+    } catch (error) {
+        console.error("Get user error:", error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
 });
 
 // Clean up nonces
@@ -468,14 +530,16 @@ setInterval(() => {
     }
 }, 5 * 60 * 1000);
 
-const PORT = 3002;
+const PORT = 3002; // Change to 3002 for second server
 app.listen(PORT, () => {
     console.log(`✅ MPC Server running on port ${PORT}`);
     console.log(`🌐 Network: ${NETWORK}`);
-    console.log(`📡 Working endpoints:`);
-    console.log(`   POST /send/simple-transfer  ← USE THIS FOR TESTING`);
+    console.log(`📡 Endpoints:`);
+    console.log(`   POST /create-user`);
     console.log(`   POST /send/step1`);
     console.log(`   POST /send/step2`);
     console.log(`   POST /send/aggregate-and-broadcast`);
+    console.log(`   POST /send/simple-transfer`);
+    console.log(`   GET  /user/:userId`);
     console.log(`   GET  /health`);
 });

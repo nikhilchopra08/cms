@@ -24,88 +24,190 @@ const router = Router();
 export default router;
 
 // Helper function to combine public keys (simplified MPC key aggregation)
-function combinePublicKeysEd25519(publicKeys, threshold) {
-    console.log("Combining public keys for MPC:");
-    console.log("Public keys:", publicKeys);
+// Helper function to combine public keys into aggregated key
+function createAggregatedPublicKey(publicKeys, threshold) {
+    console.log("Creating aggregated public key from:", publicKeys);
     console.log("Threshold:", threshold);
     
-    // In real MPC, you would use proper threshold cryptography
-    // For now, we'll create a deterministic aggregated key
+    // Sort keys for deterministic result
+    const sortedKeys = publicKeys.sort();
     
-    // Create a hash of all public keys + threshold
-    const combinedString = publicKeys.sort().join('') + threshold;
+    // Create a combined string
+    const combinedString = sortedKeys.join('') + threshold.toString();
+    
+    // Hash to create deterministic public key
     const hash = crypto.createHash('sha256').update(combinedString).digest();
     
-    // Use the hash as a seed to generate a deterministic keypair
-    const seed = hash.slice(0, 32); // First 32 bytes for seed
-    
-    // Generate keypair from seed (deterministic)
-    const keypair = nacl.sign.keyPair.fromSeed(seed);
-    
-    // Convert to Solana Keypair format
-    const solanaKeypair = Keypair.fromSecretKey(Buffer.from(keypair.secretKey));
-    
-    console.log("Generated aggregated public key:", solanaKeypair.publicKey.toString());
-    
-    return {
-        aggregatedPublicKey: solanaKeypair.publicKey.toString(),
-        aggregatedSecretKey: bs58.encode(solanaKeypair.secretKey) // Store for reference (in production, split this)
-    };
-}
-
-// Alternative: Create a simple multisig address
-function createMultisigAddress(publicKeys, threshold) {
-    console.log("Creating multisig-like address...");
-    
-    // Sort keys for deterministic result
-    const sortedKeys = publicKeys.map(k => new PublicKey(k)).sort((a, b) => 
-        a.toBuffer().compare(b.toBuffer())
-    );
-    
-    // Create a combined hash
-    let combinedBuffer = Buffer.concat([
-        Buffer.from([threshold]), // Threshold as first byte
-        ...sortedKeys.map(k => k.toBuffer())
-    ]);
-    
-    // Hash to create deterministic address
-    const hash = crypto.createHash('sha256').update(combinedBuffer).digest();
-    
-    // Convert to PublicKey
-    const aggregatedKey = new PublicKey(hash);
-    
-    console.log("Multisig-like aggregated key:", aggregatedKey.toString());
-    
-    return {
-        aggregatedPublicKey: aggregatedKey.toString(),
-        // Note: There's no corresponding private key for this method
-        // This is just for address generation
-    };
-}
-
-// Helper to airdrop SOL
-async function airdropToAddress(publicKey, amountInSol) {
+    // Convert to Solana PublicKey format (base58)
+    let aggregatedKey;
     try {
-        const publicKeyObj = new PublicKey(publicKey);
-        console.log(`Airdropping ${amountInSol} SOL to ${publicKey}...`);
-        
-        const signature = await connection.requestAirdrop(
-            publicKeyObj,
-            amountInSol * 1e9 // Convert SOL to lamports
-        );
-        
-        console.log(`Airdrop signature: ${signature}`);
-        
-        // Wait for confirmation
-        await connection.confirmTransaction(signature, 'confirmed');
-        console.log(`✅ Airdrop completed to ${publicKey}`);
-        
-        return signature;
+        aggregatedKey = new PublicKey(hash);
     } catch (error) {
-        console.error("Airdrop failed:", error.message);
-        throw error;
+        // If hash doesn't make valid public key, use a different approach
+        console.log("Hash not valid as public key, using alternative method...");
+        
+        // Create deterministic keypair from hash
+        const seed = hash.slice(0, 32);
+        const { publicKey } = require('tweetnacl').sign.keyPair.fromSeed(seed);
+        aggregatedKey = new PublicKey(Buffer.from(publicKey));
     }
+    
+    console.log("Aggregated public key:", aggregatedKey.toString());
+    return aggregatedKey.toString();
 }
+
+// Alternative: Simple XOR combination (for testing)
+function createSimpleAggregatedKey(publicKeys) {
+    console.log("Creating simple aggregated key...");
+    
+    // Convert all public keys to buffers and XOR them
+    let combinedBuffer = Buffer.alloc(32, 0); // 32 bytes for ed25519 public key
+    
+    for (const pubKey of publicKeys) {
+        try {
+            const pubKeyBuffer = new PublicKey(pubKey).toBuffer();
+            
+            // XOR each byte
+            for (let i = 0; i < 32; i++) {
+                combinedBuffer[i] ^= pubKeyBuffer[i];
+            }
+        } catch (error) {
+            console.error("Error processing public key:", pubKey, error.message);
+        }
+    }
+    
+    // Convert back to PublicKey
+    const aggregatedKey = new PublicKey(combinedBuffer);
+    console.log("Simple aggregated key:", aggregatedKey.toString());
+    return aggregatedKey.toString();
+}
+
+router.post("/create-user", adminAuthMiddleware, async (req, res) => {
+    try {
+        const {success, data} = CreateUserSchema.safeParse(req.body);
+
+        console.log("Creating user with data:", data);
+        
+        if(!success){
+            return res.status(403).json({
+                message : "Invalid input data"
+            });
+        }
+
+        // Step 1: Create user in MAIN database
+        console.log("Step 1: Creating user in main database...");
+        const user = await prismaClient.user.create({
+            data: {
+                email: data.email,
+                phone: data.number,
+                password: data.password,
+                role: "USER"
+            }
+        });
+
+        console.log(`Created user with ID: ${user.id}`);
+
+        // Step 2: Create key shares on all MPC servers
+        console.log("\nStep 2: Creating key shares on MPC servers...");
+        const serverResponses = await Promise.all(MPC_SERVER.map(async (server, index) => {
+            try {
+                console.log(`[Server ${index}] Creating key share on ${server}`);
+                const response = await axios.post(`${server}/create-user`, {
+                    userId: user.id
+                }, {
+                    timeout: 30000
+                });
+                
+                console.log(`[Server ${index}] Key share created:`, response.data.publicKey);
+                
+                return {
+                    server: server,
+                    publicKey: response.data.publicKey,
+                    success: response.data.success
+                };
+            } catch (error) {
+                console.error(`[Server ${index}] Failed to create key share:`, error.message);
+                throw new Error(`Failed to create key share on server ${index}: ${error.message}`);
+            }
+        }));
+
+        // Extract public keys from server responses
+        const individualPublicKeys = serverResponses.map(r => r.publicKey);
+        console.log("\nIndividual public keys from MPC servers:", individualPublicKeys);
+
+        // Step 3: Create aggregated public key
+        console.log("\nStep 3: Creating aggregated public key...");
+        
+        let aggregatedPublicKey;
+        try {
+            // Try method 1: Hash-based aggregation
+            aggregatedPublicKey = createAggregatedPublicKey(individualPublicKeys, MPC_THRESHOLD);
+            
+            // Verify it's a valid public key
+            new PublicKey(aggregatedPublicKey); // Will throw if invalid
+            console.log("✅ Aggregated key is valid:", aggregatedPublicKey);
+            
+        } catch (error) {
+            console.log("Hash method failed, trying simple XOR method...");
+            aggregatedPublicKey = createSimpleAggregatedKey(individualPublicKeys);
+        }
+
+        // Step 4: Store aggregated key in MAIN database
+        console.log("\nStep 4: Storing aggregated key in main database...");
+        await prismaClient.user.update({
+            where: {
+                id: user.id
+            },
+            data: {
+                publicKey: aggregatedPublicKey
+            }
+        });
+
+        console.log("✅ Aggregated key stored for user:", aggregatedPublicKey);
+
+        // Step 5: Return response
+        res.json({
+            success: true,
+            message: "User created successfully with MPC setup",
+            user: {
+                id: user.id,
+                email: user.email,
+                phone: user.phone,
+                publicKey: aggregatedPublicKey,
+                mpcDetails: {
+                    serverCount: MPC_SERVER.length,
+                    threshold: MPC_THRESHOLD,
+                    individualKeys: individualPublicKeys,
+                    servers: MPC_SERVER
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error("Error creating user:", error);
+        
+        // Try to clean up if user was created but MPC setup failed
+        if (req.body.email) {
+            try {
+                await prismaClient.user.deleteMany({
+                    where: {
+                        email: req.body.email
+                    }
+                });
+                console.log("Cleaned up partially created user");
+            } catch (cleanupError) {
+                console.error("Cleanup failed:", cleanupError.message);
+            }
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: "Failed to create user with MPC setup",
+            error: error.message
+        });
+    }
+});
+
 
 router.post("/signin", async (req, res) => {
     console.log("inside the signin")
@@ -147,138 +249,4 @@ router.post("/signin", async (req, res) => {
     res.json({
         token
     })
-});
-
-router.post("/create-user", adminAuthMiddleware, async (req, res) => {
-    try {
-        const {success, data} = CreateUserSchema.safeParse(req.body);
-
-        console.log("Creating user with data:", data);
-        
-        if(!success){
-            res.status(403).json({
-                message : "Invalid input data"
-            })
-            return;
-        }
-
-        // Create user in database
-        const user = await prismaClient.user.create({
-            data: {
-                email : data.email,
-                phone : data.number,
-                password: data.password,
-                role : "USER"
-            }
-        });
-
-        console.log(`Created user with ID: ${user.id}`);
-
-        // Step 1: Create key shares on all MPC servers
-        console.log("Creating key shares on MPC servers...");
-        const serverResponses = await Promise.all(MPC_SERVER.map(async (server, index) => {
-            try {
-                console.log(`[Server ${index}] Creating key share on ${server}`);
-                const response = await axios.post(`${server}/create-user`, {
-                    userId: user.id
-                }, {
-                    timeout: 30000
-                });
-                
-                console.log(`[Server ${index}] Key share created:`, {
-                    publicKey: response.data.publicKey,
-                    server: server
-                });
-                
-                return response.data;
-            } catch (error) {
-                console.error(`[Server ${index}] Failed to create key share:`, error.message);
-                throw new Error(`Failed to create key share on server ${index}: ${error.message}`);
-            }
-        }));
-
-        // Extract public keys from server responses
-        const individualPublicKeys = serverResponses.map(r => r.publicKey);
-        console.log("Individual public keys:", individualPublicKeys);
-
-        // Step 2: Create aggregated public key using MPC logic
-        console.log("\nCreating aggregated public key...");
-        
-        // Method 1: Deterministic aggregated key (has corresponding private key)
-        const aggregatedKeyResult = combinePublicKeysEd25519(individualPublicKeys, MPC_THRESHOLD);
-        
-        // OR Method 2: Multisig-like address (no corresponding private key)
-        // const aggregatedKeyResult = createMultisigAddress(individualPublicKeys, MPC_THRESHOLD);
-        
-        const aggregatedPublicKey = aggregatedKeyResult.aggregatedPublicKey;
-        
-        console.log("Aggregated public key created:", aggregatedPublicKey);
-        
-        if (aggregatedKeyResult.aggregatedSecretKey) {
-            console.log("Aggregated secret key (for reference):", aggregatedKeyResult.aggregatedSecretKey);
-            
-            // In production, you would split this secret key into shares
-            // and distribute to MPC servers
-        }
-
-        // Step 3: Store aggregated key in database
-        await prismaClient.user.update({
-            where: {
-                id: user.id
-            },
-            data: {
-                publicKey: aggregatedPublicKey
-            }
-        });
-
-        // Also store individual keys for reference
-        for (let i = 0; i < serverResponses.length; i++) {
-            await prismaClient.keyShare.create({
-                data: {
-                    userId: user.id,
-                    publicKey: individualPublicKeys[i],
-                    secretKey: serverResponses[i].secretKey || "stored-on-server",
-                    serverIndex: i
-                }
-            });
-        }
-
-        // Step 4: Fund the aggregated account
-        console.log("\nFunding aggregated account...");
-        try {
-            const airdropSignature = await airdropToAddress(aggregatedPublicKey, 0.1);
-            console.log("Airdrop successful:", airdropSignature);
-        } catch (airdropError) {
-            console.warn("Airdrop failed, but continuing:", airdropError.message);
-            // Continue even if airdrop fails - user might fund manually
-        }
-
-        // Step 5: Return response
-        res.json({
-            success: true,
-            message: "User created successfully with MPC keys",
-            user: {
-                id: user.id,
-                email: user.email,
-                phone: user.phone,
-                publicKey: aggregatedPublicKey,
-                individualKeys: individualPublicKeys,
-                threshold: MPC_THRESHOLD,
-                serverCount: MPC_SERVER.length
-            },
-            keyDetails: {
-                aggregatedPublicKey: aggregatedPublicKey,
-                individualPublicKeys: individualPublicKeys,
-                threshold: MPC_THRESHOLD
-            }
-        });
-
-    } catch (error) {
-        console.error("Error creating user:", error);
-        res.status(500).json({
-            success: false,
-            message: "Failed to create user with MPC setup",
-            error: error.message
-        });
-    }
 });
