@@ -11,9 +11,11 @@
   },
   "dependencies": {
     "@types/express": "^5.0.6",
+    "bs58": "^6.0.0",
+    "common": "*",
     "express": "^5.2.1",
+    "mpc-db": "*",
     "solana-mpc-tss-lib": "*",
-    "mpc-db" : "*",
-    "common" : "*"
+    "tweetnacl": "^1.0.3"
   }
 }

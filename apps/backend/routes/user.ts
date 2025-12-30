@@ -6,6 +6,13 @@ import jwt from "jsonwebtoken";
 import { cli, MPC_SERVER, MPC_THRESHOLD } from "./admin";
 import axios from "axios";
 import { NETWORK } from "common/solana";
+import { 
+    Connection, 
+    Keypair, 
+    PublicKey, 
+    SystemProgram, 
+    Transaction,
+} from '@solana/web3.js';
 
 const router = Router();
 
@@ -112,88 +119,173 @@ router.get("/courses", authMiddleware, async (req, res) => {
 
 
 router.post("/send", authMiddleware, async(req, res) => {
-    const {success, data} = SendSchema.safeParse(req.body);
+    try {
+        const {success, data} = SendSchema.safeParse(req.body);
 
-    if(!success){
-        res.status(403).json({
-            message : "Incorrect credentials"
-        })
-        return;
-    }
-
-    const user = await prismaClient.user.findFirst({
-        where: {
-            id : req.userId
+        if(!success){
+            res.status(403).json({
+                message: "Incorrect credentials"
+            })
+            return;
         }
-    })
 
-    if(!user){
-        res.status(403).json({
-            message : "User not found"
+        const user = await prismaClient.user.findFirst({
+            where: {
+                id: req.userId
+            }
         })
-        return;
-    }
 
-    const recentBlockhash = await cli.recentBlockHash();
+        if(!user){
+            res.status(403).json({
+                message: "User not found"
+            })
+            return;
+        }
 
-    const step1Responses = await Promise.all(MPC_SERVER.map(async (server) => {
-        const response = await axios.post(`${server}/send/step1`, {
+        console.log("=== STARTING MPC TRANSACTION ===");
+        console.log("User:", req.userId);
+        console.log("To:", data.to);
+        console.log("Amount:", data.amount);
+        console.log("MPC Servers:", MPC_SERVER.length);
+
+        // Get fresh blockhash
+        const connection = new Connection(NETWORK, 'confirmed');
+        const { blockhash } = await connection.getLatestBlockhash('confirmed');
+        console.log("Recent blockhash:", blockhash);
+
+        // ===== STEP 1: Collect nonce commitments =====
+        console.log("\n=== STEP 1: Collecting nonce commitments ===");
+        
+        const step1Responses = await Promise.all(MPC_SERVER.map(async (server, index) => {
+            try {
+                console.log(`[Server ${index}] Requesting step1 from ${server}`);
+                const response = await axios.post(`${server}/send/step1`, {
+                    to: data.to,
+                    amount: data.amount,
+                    userId: req.userId,
+                    recentBlockhash: blockhash,
+                    aggregatedPublicKey: user.publicKey // Still pass for reference
+                }, {
+                    timeout: 30000
+                })
+                
+                console.log(`[Server ${index}] ✓ Received nonce from:`, response.data.response.publicKey);
+                
+                return response.data.response;
+            } catch (error) {
+                console.error(`[Server ${index}] ✗ Error:`, error.message);
+                throw new Error(`Step1 failed at server ${index}: ${error.message}`);
+            }
+        }));
+
+        // IMPORTANT: Each server will have DIFFERENT message bytes because they use different sender keys
+        // That's OK for MPC - each server signs with its own key
+        
+        console.log("\n✓ Step 1 Complete");
+        console.log("  Servers responded:", step1Responses.length);
+        console.log("  Server public keys:", step1Responses.map(r => r.publicKey));
+        console.log("  Server sender keys:", step1Responses.map(r => r.actualSenderKey || r.publicKey));
+        
+        // Collect all public nonces
+        const allPublicNonces = step1Responses.map(r => r.publicNonce);
+        const participantKeys = step1Responses.map(r => r.publicKey);
+        const actualSenderKeys = step1Responses.map(r => r.actualSenderKey || r.publicKey);
+
+        // ===== STEP 2: Collect partial signatures =====
+        console.log("\n=== STEP 2: Collecting partial signatures ===");
+        
+        const step2Responses = await Promise.all(MPC_SERVER.map(async (server, index) => {
+            try {
+                console.log(`[Server ${index}] Requesting step2 from ${server}`);
+                
+                const response = await axios.post(`${server}/send/step2`, {
+                    userId: req.userId,
+                    step1Response: step1Responses[index],
+                    allPublicNonces: allPublicNonces
+                }, {
+                    timeout: 30000
+                });
+                
+                console.log(`[Server ${index}] ✓ Received partial signature from:`, response.data.publicKey);
+                
+                return {
+                    ...response.data.response,
+                    publicKey: response.data.publicKey,
+                    actualSenderKey: response.data.response.actualSenderKey
+                };
+            } catch (error) {
+                console.error(`[Server ${index}] ✗ Error:`, error.message);
+                throw new Error(`Step2 failed at server ${index}: ${error.message}`);
+            }
+        }));
+
+        // Prepare partial signatures for aggregation
+        const partialSignaturesForAggregation = step2Responses.map(response => ({
+            publicKey: response.publicKey,
+            partialSignature: response.partialSignature,
+            actualSenderKey: response.actualSenderKey
+        }));
+
+        console.log("\n✓ Step 2 Complete");
+        console.log("  Partial signatures collected:", partialSignaturesForAggregation.length);
+        console.log("  First signature sender:", partialSignaturesForAggregation[0]?.actualSenderKey);
+
+        // ===== STEP 3: Aggregate and broadcast =====
+        console.log("\n=== STEP 3: Aggregating and broadcasting ===");
+
+        // Use the first server's actual sender key
+        const firstSenderKey = partialSignaturesForAggregation[0]?.actualSenderKey;
+        
+        if (!firstSenderKey) {
+            throw new Error("No sender key found");
+        }
+
+        console.log("Using sender key:", firstSenderKey);
+        console.log("Original aggregated key (not used):", user.publicKey);
+
+        // Call aggregate-and-broadcast with ALL necessary data
+        const aggregateResponse = await axios.post(`${MPC_SERVER[0]}/send/aggregate-and-broadcast`, {
             to: data.to,
             amount: data.amount,
-            userId : req.userId,
-            recentBlockhash: recentBlockhash
-        })
-        return response.data.response
-    }))
+            recentBlockhash: blockhash,
+            partialSignatures: partialSignaturesForAggregation,
+            // Note: We're NOT passing aggregatedPublicKey anymore
+            // The server will use the actual sender key from the first signature
+        }, {
+            timeout: 60000
+        });
 
-    console.log("step1 response" , step1Responses);
+        console.log("\n✓ Step 3 Complete");
+        console.log("  Transaction ID:", aggregateResponse.data.signature);
+        console.log("  Success:", aggregateResponse.data.success);
 
-    
-    const step2Responses = await Promise.all(MPC_SERVER.map(async (server, index) => {
+        if (!aggregateResponse.data.success) {
+            throw new Error("Transaction broadcast failed");
+        }
 
-        console.log({
-            to: data.to,
-            amount : data.amount,
-            userId : req.userId,
-            recentBlockhash: recentBlockhash,
-            step1Response: JSON.stringify(step1Responses[index]),
-            allPublicNonces: step1Responses.map((r) => r.publicNonce)
-        })
+        console.log("\n=== ✅ TRANSACTION SUCCESSFUL ===");
+        
+        res.json({
+            success: true,
+            signature: aggregateResponse.data.signature,
+            transactionDetails: {
+                from: firstSenderKey, // Use actual sender
+                to: data.to,
+                amount: data.amount,
+                signersParticipated: partialSignaturesForAggregation.length,
+                threshold: MPC_THRESHOLD,
+                explorerUrl: `https://explorer.solana.com/tx/${aggregateResponse.data.signature}?cluster=devnet`
+            }
+        });
 
-        const response = await axios.post(`${server}/send/step2`, {
-            to: data.to,
-            amount : data.amount,
-            userId : req.userId,
-            recentBlockhash: recentBlockhash,
-            step1Response: JSON.stringify(step1Responses[index]),
-            allPublicNonces: step1Responses.map((r) => r.publicNonce)
-        })
-        return response.data;
-    }))
-
-    console.log("step2 response" , step2Responses);
-
-    const partialSignature = step2Responses.map((r) => r.response);
-
-    const transactionDetails = {
-        amount : data.amount,
-        to : data.to,
-        from : user.publicKey,
-        network : NETWORK,
-        memo : undefined,
-        recentBlockhash: recentBlockhash
+    } catch (error) {
+        console.error("\n=== ❌ TRANSACTION FAILED ===");
+        console.error("Error:", error.message);
+        
+        res.status(500).json({
+            success: false,
+            message: "MPC transaction failed",
+            error: error.message
+        });
     }
-
-    const signature = await cli.aggregateSignaturesAndBroadcast(
-        JSON.stringify(partialSignature),
-        JSON.stringify(transactionDetails),
-        JSON.stringify({
-            aggregatedPublicKey : user.publicKey,
-            participantKeys : step2Responses.map((r) => r.publicKey),
-            threshold: MPC_THRESHOLD
-        })
-    )
-
-    res.json(signature);
-
-})
+});

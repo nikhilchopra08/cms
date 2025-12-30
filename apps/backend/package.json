@@ -10,13 +10,16 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@solana/web3.js": "^1.98.4",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "axios": "^1.13.2",
-    "cors": "^2.8.5",
-    "express": "^5.2.1",
+    "bs58": "^6.0.0",
     "common": "*",
+    "cors": "^2.8.5",
     "db": "*",
-    "solana-mpc-tss-lib" : "*"
+    "express": "^5.2.1",
+    "solana-mpc-tss-lib": "*",
+    "tweetnacl": "^1.0.3"
   }
 }

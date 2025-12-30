@@ -1,1 +1,1 @@
-export const NETWORK = "devnet"
+export const NETWORK = "https://solana-devnet.g.alchemy.com/v2/mRNVIzf44k3YCI1_eQPoO"
